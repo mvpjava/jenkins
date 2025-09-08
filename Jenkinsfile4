@@ -1,0 +1,62 @@
+pipeline {
+    agent none  // we'll specify agent per stage
+    stages {
+
+        stage('Scan for Secrets') {
+            agent any   // run on Jenkins host or static agent with Docker & Trivy
+            steps {
+                sh '''
+                # Scan the image before running the container
+                trivy image --scanners secret --exit-code 1 mvpjava/nginx:v.1.0
+                '''
+            }
+        }
+
+        stage('Run Tests in Nginx Container') {
+            agent {
+                docker {
+					image 'mvpjava/nginx:v.1.0'
+					args '-u root:root' 
+                }
+            }
+            stages {  // nested stages inside this container
+				stage('Run Nginx') {
+					steps {
+						sh 'nginx -g "daemon off;" &'
+						sh 'sleep 2'
+					}
+				}
+				
+                stage('Parallel Tests') {
+                    parallel {
+					
+						stage('Test page content') {
+							steps {
+								sh 'curl -s http://localhost | grep -i "hello from my custom nginx image"'
+							}
+						}
+						
+						stage('Test HTTP code') {
+							steps {
+								sh '''
+								if [ "$(curl -o /dev/null -s -w "%{http_code}" http://localhost)" -ne 200 ]; then
+									echo "HTTP status is not 200!"
+									exit 1
+								fi
+								echo "HTTP status is 200 as expected"
+								'''
+							}
+						}
+						
+						stage('Test Headers') {
+							steps {
+								sh 'curl -I http://localhost | grep "Content-Type: text/html"'
+							}
+						}
+					}
+				}		
+            }
+		}
+    }
+}
+
